@@ -228,3 +228,71 @@ print(X_train_rules.head())
 print("\n--- Summary of Features ---")
 # .describe() gives us a quick summary (avg, min, max, etc.)
 print(X_train_rules.describe())
+
+
+
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import classification_report
+from scipy.sparse import hstack
+import joblib # For saving our model!
+
+# --- 10. Train the "ML-lite" Model ---
+print("\n--- Training the ML Model ---")
+
+# --- Part A: Create the TF-IDF Features ---
+print("Building TF-IDF features (this is the slowest step)...")
+# We create the 'vectorizer' tool
+# stop_words='english' removes common words (the, a, is)
+# max_features=5000 tells it to only keep the 5,000 most important words
+vectorizer = TfidfVectorizer(stop_words='english', max_features=5000)
+
+# We 'fit' it on the training data (to learn the words)
+# and 'transform' it into a number matrix
+X_train_tfidf = vectorizer.fit_transform(X_train)
+
+# We ONLY 'transform' the test data (to use the words it already learned)
+X_test_tfidf = vectorizer.transform(X_test)
+
+print("TF-IDF features built.")
+
+# --- Part B: Combine TF-IDF with our Rule Features ---
+# 'hstack' (horizontal stack) is a tool to "glue" our two feature
+# tables together side-by-side.
+
+# X_train_rules is our pandas DataFrame. .values gets the raw numbers.
+X_train_combined = hstack([X_train_tfidf, X_train_rules.values])
+X_test_combined = hstack([X_test_tfidf, X_test_rules.values])
+
+print("Combined features ready.")
+
+# --- Part C: Train the Logistic Regression Model ---
+print("Fitting the Logistic Regression model...")
+
+# We create the model.
+# class_weight='balanced' helps a lot, as it auto-handles
+# if we have more phishing than benign emails (or vice-versa).
+ml_model = LogisticRegression(solver='liblinear', class_weight='balanced', random_state=42)
+
+# We 'fit' the model on our combined training data!
+ml_model.fit(X_train_combined, y_train)
+
+print("Model training complete!")
+
+# --- 11. Evaluate the Model ---
+print("\n--- MODEL EVALUATION ON TEST DATA ---")
+# Now we use the 'test' data the model has NEVER seen
+y_pred = ml_model.predict(X_test_combined)
+
+# This report gives us Accuracy, Precision, and Recall
+# '0' is Benign, '1' is Phishing
+report = classification_report(y_test, y_pred, target_names=['Benign (0)', 'Phishing (1)'])
+print(report)
+
+# --- 12. Save Your Model ---
+# We save our trained model and the vectorizer to disk.
+# This way, our 'demo' script can use them later!
+joblib.dump(ml_model, 'phishing_model.pkl')
+joblib.dump(vectorizer, 'tfidf_vectorizer.pkl')
+
+print("\nModel and Vectorizer saved to 'phishing_model.pkl' and 'tfidf_vectorizer.pkl'")
