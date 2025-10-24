@@ -4,6 +4,18 @@ import re # (Stands for Regular Expressions, for finding URLs)
 from bs4 import BeautifulSoup # (For parsing HTML emails)
 from urllib.parse import urlparse # (For analyzing URLs)
 
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import classification_report
+from scipy.sparse import hstack
+import joblib # For saving our model!
+
+
+import matplotlib.pyplot as plt
+from sklearn.metrics import ConfusionMatrixDisplay, RocCurveDisplay, PrecisionRecallDisplay
+
+
+
 # --- 1. Load the Dataset ---
 print("Loading master_phishing_dataset.csv...")
 try:
@@ -231,11 +243,7 @@ print(X_train_rules.describe())
 
 
 
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import classification_report
-from scipy.sparse import hstack
-import joblib # For saving our model!
+
 
 # --- 10. Train the "ML-lite" Model ---
 print("\n--- Training the ML Model ---")
@@ -296,3 +304,51 @@ joblib.dump(ml_model, 'phishing_model.pkl')
 joblib.dump(vectorizer, 'tfidf_vectorizer.pkl')
 
 print("\nModel and Vectorizer saved to 'phishing_model.pkl' and 'tfidf_vectorizer.pkl'")
+
+
+# --- 13. Create and Save Visualizations ---
+print("\n--- Generating and saving visualizations ---")
+
+# Set a title for our plots
+fig, ax = plt.subplots(figsize=(8, 6))
+ax.set_title("Model Performance: Confusion Matrix")
+
+# 1. Confusion Matrix
+# Shows us: [True Neg] [False Pos]
+#            [False Neg] [True Pos]
+ConfusionMatrixDisplay.from_predictions(
+    y_test, y_pred, 
+    ax=ax, 
+    cmap='Blues', 
+    display_labels=['Benign', 'Phishing']
+)
+plt.savefig('confusion_matrix.png')
+print("Saved 'confusion_matrix.png'")
+
+# 2. ROC Curve
+# Shows the trade-off between catching phishing (True Positive)
+# and accidentally flagging benign emails (False Positive).
+# A good model 'hugs' the top-left corner.
+fig, ax = plt.subplots(figsize=(8, 6))
+RocCurveDisplay.from_estimator(
+    ml_model, X_test_combined, y_test, 
+    ax=ax, 
+    name='Logistic Regression'
+)
+ax.set_title("ROC (Receiver Operating Characteristic) Curve")
+plt.savefig('roc_curve.png')
+print("Saved 'roc_curve.png'")
+
+# 3. Precision-Recall Curve
+# Shows the trade-off between Precision and Recall.
+fig, ax = plt.subplots(figsize=(8, 6))
+PrecisionRecallDisplay.from_estimator(
+    ml_model, X_test_combined, y_test, 
+    ax=ax, 
+    name='Logistic Regression'
+)
+ax.set_title("Precision-Recall Curve")
+plt.savefig('precision_recall_curve.png')
+print("Saved 'precision_recall_curve.png'")
+
+print("\nAll visualizations saved! Project training is complete.")
