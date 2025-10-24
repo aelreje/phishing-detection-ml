@@ -58,7 +58,9 @@ def check_keywords(email_body):
             count += 1
     return count
 
-# --- Rule 2: URL & Link Features (IMPROVED) ---
+
+
+# --- Rule 2: URL & Link Features (DEBUGGING VERSION) ---
 def extract_url_features(email_body):
     """
     Extracts features from URLs and <a> tags in an email body.
@@ -68,12 +70,12 @@ def extract_url_features(email_body):
     url_count = 0
     ip_in_url_count = 0
     mismatch_count = 0
+    # domain_in_text_count = 0 # <-- OUR NEW DEBUG COUNTER
     
     # Check for HTML content
     if '<html>' in email_body.lower():
         soup = BeautifulSoup(email_body, 'html.parser')
         
-        # Find all <a> tags (links)
         for a in soup.find_all('a', href=True):
             href = a['href']
             if not href:
@@ -81,37 +83,27 @@ def extract_url_features(email_body):
             
             url_count += 1
             
-            # Check for IP address in URL
             if re.search(r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b', href):
                 ip_in_url_count += 1
 
-            # --- START OF IMPROVED MISMATCH CHECK ---
-            link_text = a.text.strip().lower() # The visible text
+            link_text = a.text.strip().lower()
             try:
-                # Use regex to find a domain-like string in the link text
-                # This looks for patterns like 'something.com' or 'something.net'
-                domain_match = re.search(r'([a-zA-Z0-9-]+\.(com|net|org|gov|edu))', link_text)
+                # Use a MORE GENERAL regex
+                domain_match = re.search(r'([a-zA-Z0-9-]{2,}\.[a-zA-Z]{2,})', link_text)
                 
                 if domain_match:
-                    # We found a domain in the link text, e.g., "my-bank.com"
+                    # domain_in_text_count += 1 # <-- WE FOUND ONE!
+                    
                     link_domain_text = domain_match.group(0) 
+                    href_domain = urlparse(href).netloc 
                     
-                    # Get the domain from the actual link destination
-                    href_domain = urlparse(href).netloc # e.g., "192.168.4.1"
-                    
-                    # Check if the visible domain is IN the destination domain
-                    # e.g., "my-bank.com" in "login.my-bank.com" -> OK
-                    # e.g., "my-bank.com" in "scam-site.com" -> MISMATCH
-                    # e.g., "my-bank.com" in "192.168.4.1" -> MISMATCH
                     if href_domain and link_domain_text not in href_domain:
-                        print(f"--- DEBUG: Mismatch found! Text domain '{link_domain_text}' not in href domain '{href_domain}'")
                         mismatch_count += 1
                 
             except Exception:
-                pass # Ignore malformed URLs
-            # --- END OF IMPROVED MISMATCH CHECK ---
+                pass
     else:
-        # Plain text email: just find URLs using regex
+        # Plain text email
         urls = re.findall(r'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\\(\\),]|(?:%[0-9a-fA-F][0-9a-fA-F]))+', email_body)
         url_count = len(urls)
         for url in urls:
@@ -120,9 +112,13 @@ def extract_url_features(email_body):
 
     return {
         'url_count': url_count,
-        'ip_in_url': 1 if ip_in_url_count > 0 else 0, # Return 1 (yes) or 0 (no)
-        'link_mismatch': 1 if mismatch_count > 0 else 0
+        'ip_in_url': 1 if ip_in_url_count > 0 else 0, 
+        'link_mismatch': 1 if mismatch_count > 0 else 0,
+        # 'domain_in_text_count': domain_in_text_count # <-- RETURN THE NEW COUNTER
     }
+
+
+
 
 
 
@@ -184,7 +180,7 @@ def get_rule_based_score(features):
 
 
 
-# --- 7. Create Master Feature Engineering Function ---
+# --- 7. Create Master Feature Engineering Function (DEBUGGING VERSION) ---
 def build_rule_features(data_series):
     """
     Applies all our feature extractors to a pandas Series (like X_train).
@@ -192,22 +188,23 @@ def build_rule_features(data_series):
     """
     print("Starting rule-based feature extraction...")
     
-    # Create an empty DataFrame to store our new features
     features_df = pd.DataFrame()
     
     # 1. Apply keyword checker
-    # .apply() runs the 'check_keywords' function on every email
     features_df['keyword_count'] = data_series.apply(check_keywords)
     
     # 2. Apply URL feature extractor
-    # This is more complex since 'extract_url_features' returns a dictionary.
-    # We use a 'lambda' function to pull out each piece.
     print("Extracting URL features (this may take a moment)...")
     url_features = data_series.apply(extract_url_features)
     
     features_df['url_count'] = url_features.apply(lambda x: x['url_count'])
     features_df['ip_in_url'] = url_features.apply(lambda x: x['ip_in_url'])
     features_df['link_mismatch'] = url_features.apply(lambda x: x['link_mismatch'])
+    
+    # --- ADD THIS NEW LINE ---
+    # .get() is safer, it returns 0 if the key doesn't exist
+    # features_df['domain_in_text_count'] = url_features.apply(lambda x: x.get('domain_in_text_count', 0))
+    # --- END OF NEW LINE ---
     
     print("Rule-based feature extraction complete!")
     return features_df
