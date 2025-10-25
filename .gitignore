@@ -7,3 +7,7 @@ Nigerian_Fraud.csv
 phishing_email.csv
 SpamAssasin.csv
 *.csv
+models/
+*.eml
+*.pkl
+*.png
