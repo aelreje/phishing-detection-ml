@@ -11,3 +11,4 @@ models/
 *.eml
 *.pkl
 *.png
+/visuals
