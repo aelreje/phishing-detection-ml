@@ -1,6 +1,5 @@
 import streamlit as st
 import joblib 
-# --- Imports for Email Processing and Feature Extraction ---
 import email 
 from email.policy import default
 import re
@@ -8,18 +7,16 @@ import numpy as np
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 from scipy.sparse import hstack
-# -----------------------------------------------------------
 
-# --- 1. YOUR COPIED FUNCTIONS (Feature Extraction from demo.py) ---
+# --- 1. FEATURE EXTRACTION HELPERS (from demo.py) ---
+# (These are unchanged)
 
-# 1. SUSPICIOUS_KEYWORDS 
 SUSPICIOUS_KEYWORDS = [
     'urgent', 'security alert', 'ssn', 'credit card', 
     'unusual activity', 'action required', 'suspend', 'locked',
     'bank', 'invoice', 'payment', 'verify your'
 ]
 
-# 2. check_keywords(email_body)
 def check_keywords(email_body):
     """Counts how many suspicious keywords are in the email."""
     count = 0
@@ -30,11 +27,9 @@ def check_keywords(email_body):
             count += 1
     return count
 
-# 3. extract_url_features(email_body)
 def extract_url_features(email_body):
     """
     Extracts features from URLs and <a> tags in an email body.
-    This handles both plain text and HTML.
     """
     email_body = str(email_body) 
     url_count = 0
@@ -64,7 +59,6 @@ def extract_url_features(email_body):
                     
                     if href_domain and link_domain_text not in href_domain:
                         mismatch_count += 1
-                
             except Exception:
                 pass
     else:
@@ -80,7 +74,6 @@ def extract_url_features(email_body):
         'link_mismatch': 1 if mismatch_count > 0 else 0,
     }
 
-# 4. get_rule_based_score(features)
 def get_rule_based_score(features):
     """Calculates a simple weighted score from our rules."""
     score = 0
@@ -100,22 +93,20 @@ def get_rule_based_score(features):
     
     return score, explanation
 
-# --- 2. THE MODIFIED PARSER FUNCTION ---
+# --- 2. EMAIL PARSING HELPER ---
+
 def parse_eml(raw_bytes):
     """
     Parses raw .eml bytes (from Streamlit uploader) and extracts headers and body.
-    Returns (msg_object, email_body)
     """
     email_body = ""
     
     try:
-        # CRITICAL CHANGE: Use message_from_bytes instead of message_from_file
         msg = email.message_from_bytes(raw_bytes, policy=default) 
     except Exception as e:
         st.error(f"Error reading file bytes: {e}")
         return None, None
 
-    # The rest of the logic extracts the body content
     if msg.is_multipart():
         for part in msg.walk():
             ctype = part.get_content_type()
@@ -136,7 +127,112 @@ def parse_eml(raw_bytes):
 
     return msg, email_body
 
-# --- 3. THE CACHED MODEL LOADER ---
+# --- 3. NEW HELPER FUNCTIONS FOR UI ---
+
+def analyze_email_file(file, ml_model, tfidf_vectorizer):
+    """
+    Performs the full analysis (parsing, rules, ML) on a single uploaded file.
+    Returns a dictionary with all results.
+    """
+    
+    # 1. Parsing
+    file_bytes = file.getvalue()
+    msg_obj, body_text = parse_eml(file_bytes)
+    
+    # Handle parsing failure
+    if not body_text:
+        return {
+            'filename': file.name, 
+            'status': 'Error',
+            'error_message': 'Could not extract a readable text or HTML body.'
+        }
+        
+    # 2. Rule-Based Features
+    keyword_score = check_keywords(body_text)
+    url_features = extract_url_features(body_text)
+    all_rule_features = {
+        'keyword_count': keyword_score,
+        'url_count': url_features['url_count'],
+        'ip_in_url': url_features['ip_in_url'],
+        'link_mismatch': url_features['link_mismatch']
+    }
+    rule_score, explanation = get_rule_based_score(all_rule_features)
+
+    # 3. ML Model Prediction
+    body_tfidf = tfidf_vectorizer.transform([body_text])
+    rule_vector = np.array([[
+        all_rule_features['keyword_count'],
+        all_rule_features['url_count'],
+        all_rule_features['ip_in_url'],
+        all_rule_features['link_mismatch']
+    ]])
+    combined_features_vector = hstack([body_tfidf, rule_vector])
+    ml_prob = ml_model.predict_proba(combined_features_vector)[0][1]
+
+    # 4. Return all results in one dictionary
+    return {
+        'filename': file.name,
+        'status': 'Success',
+        'body_snippet': body_text[:500] + "...",
+        'all_rule_features': all_rule_features,
+        'rule_score': rule_score,
+        'explanation': explanation,
+        'ml_prob': ml_prob
+    }
+
+def display_report(result):
+    """
+    Takes a single result dictionary and displays the full report in Streamlit.
+    """
+    
+    # Handle the error case first
+    if result['status'] == 'Error':
+        st.error(f"Error analyzing {result['filename']}: {result['error_message']}")
+        return
+
+    # --- Display the full report ---
+    st.subheader(f"Analysis Report for: {result['filename']}")
+    
+    # --- Step 1: Snippet ---
+    st.markdown("---")
+    st.markdown("##### Extracted Email Snippet:")
+    st.code(result['body_snippet'], language='text')
+
+    # --- Step 2: Rule Features ---
+    st.markdown("---")
+    st.markdown("##### Rule-Based Features:")
+    st.json(result['all_rule_features'])
+    
+    # --- Step 3: Final Decision ---
+    st.markdown("---")
+    st.markdown("#### Final Decision & Scores")
+
+    CONFIDENCE_THRESHOLD = 0.70  # The threshold from your demo.py
+    ml_prob = result['ml_prob']
+    rule_score = result['rule_score']
+    explanation = result['explanation']
+    
+    final_decision_text = "🚨 PHISHING 🚨" if ml_prob >= CONFIDENCE_THRESHOLD else "✅ BENIGN ✅"
+    
+    if ml_prob >= CONFIDENCE_THRESHOLD:
+        st.error(f"FINAL DECISION: {final_decision_text}")
+    else:
+        st.success(f"FINAL DECISION: {final_decision_text}")
+        
+    # Use st.columns to show metrics side-by-side
+    col1, col2 = st.columns(2)
+    col1.metric("ML Model Score", f"{ml_prob * 100:.2f}%")
+    col2.metric("Rule-Based Score", f"{rule_score}")
+    
+    st.markdown("---")
+    st.markdown("##### Detailed Explanation (Rules Triggered):")
+    if not explanation:
+        st.write("No suspicious rules triggered.")
+    else:
+        for line in explanation:
+            st.write(f"- {line}")
+
+# --- 4. MODEL LOADER (CACHED) ---
 @st.cache_resource
 def load_model_assets():
     """Loads the trained ML model and TF-IDF vectorizer."""
@@ -150,7 +246,7 @@ def load_model_assets():
         return None, None 
 
 
-# --- 4. MAIN STREAMLIT APPLICATION LOGIC ---
+# --- 5. MAIN STREAMLIT APPLICATION ---
 st.title("Phishing Email Detector")
 st.write("Upload one or more .eml files to get a Phishing Score and Explanation.")
 
@@ -159,116 +255,56 @@ ml_model, tfidf_vectorizer = load_model_assets()
 if ml_model and tfidf_vectorizer:
     st.success("Trained ML Model and Vectorizer loaded successfully!")
     
-    # 5. FILE UPLOADER
+    # FILE UPLOADER
     uploaded_files = st.file_uploader(
         "Upload one or more .eml files for analysis",
         type=['eml'],
         accept_multiple_files=True
     )
     
-    # 6. START PROCESSING LOOP
+    # --- REFACTORED PROCESSING AND DISPLAY LOGIC ---
     if uploaded_files:
-        st.info(f"Received {len(uploaded_files)} file(s). Analyzing now...")
         
-        for file in uploaded_files:
-            
-            with st.expander(f"Analysis Report for: {file.name}", expanded=True): # Expanded by default for testing
-                st.markdown(f"#### Step 1: Parsing {file.name}...")
-                
-                # Get the raw bytes from the uploaded file object
-                file_bytes = file.getvalue()
-                
-                # Call our modified parsing function
-                msg_obj, body_text = parse_eml(file_bytes)
-                
-                if body_text is None:
-                    continue
-                
-                if not body_text:
-                    st.warning("Could not extract a readable text or HTML body from this email.")
-                    continue
+        # --- 1. ANALYSIS PHASE ---
+        # Run the analysis for every file first and store results
+        all_results = []
+        with st.spinner(f"Analyzing {len(uploaded_files)} file(s)..."):
+            for file in uploaded_files:
+                result = analyze_email_file(file, ml_model, tfidf_vectorizer)
+                all_results.append(result)
+        st.success(f"Analysis complete for {len(all_results)} file(s).")
 
-                st.success("Step 1 Complete: Email body successfully extracted!")
-                st.markdown("---")
-                st.markdown("##### Extracted Email Snippet:")
-                # Show the first 500 characters of the body
-                st.code(body_text[:500] + "...", language='text')
 
-                # --- STEP 2: Feature Extraction ---
-                st.markdown("---")
-                st.markdown("#### Step 2: Extracting Rule-Based Features...")
-                
-                # 1. Extract Keyword Features
-                keyword_score = check_keywords(body_text)
-                
-                # 2. Extract URL Features
-                url_features = extract_url_features(body_text)
-                
-                # 3. Combine all features into one dictionary
-                all_rule_features = {
-                    'keyword_count': keyword_score,
-                    'url_count': url_features['url_count'],
-                    'ip_in_url': url_features['ip_in_url'],
-                    'link_mismatch': url_features['link_mismatch']
-                }
-
-                # 4. Calculate the Rule-Based Score and Explanation
-                rule_score, explanation = get_rule_based_score(all_rule_features)
-                
-                # --- Step 3: Display Results ---
-                st.success("Step 2 Complete: Rule-Based Features Extracted!")
-                st.markdown("---")
-                st.markdown(f"#### Rule-Based Score: **{rule_score}**")
-                
-                st.markdown("##### Detailed Rule Features:")
-                st.json(all_rule_features) # st.json displays a dictionary cleanly
-                
-                st.warning("Analysis paused here! If the feature extraction above looks correct, we'll implement the ML prediction next.")
-                
-                # --- STEP 3: ML Model Prediction ---
-                st.markdown("---")
-                st.markdown("#### Step 3: ML Model Prediction...")
-                
-                # 1. Prepare data for the ML model (TF-IDF)
-                body_tfidf = tfidf_vectorizer.transform([body_text])
-                
-                # 2. Prepare the Rule-Based features for the ML model (NumPy Array)
-                rule_vector = np.array([[
-                    all_rule_features['keyword_count'],
-                    all_rule_features['url_count'],
-                    all_rule_features['ip_in_url'],
-                    all_rule_features['link_mismatch']
-                ]])
-                
-                # 3. Combine features
-                combined_features_vector = hstack([body_tfidf, rule_vector])
-
-                # 4. Get ML Model Prediction
-                # [0][1] gives the probability for class 1 (phishing)
-                ml_prob = ml_model.predict_proba(combined_features_vector)[0][1]
-                ml_prediction = ml_model.predict(combined_features_vector)[0]
-                
-                # --- Step 4: Show Final Report ---
-                CONFIDENCE_THRESHOLD = 0.70  # The threshold set in your demo.py
-                
-                final_decision_text = "🚨 PHISHING 🚨" if ml_prob >= CONFIDENCE_THRESHOLD else "✅ BENIGN ✅"
-                
-                if ml_prob >= CONFIDENCE_THRESHOLD:
-                    st.error(f"FINAL DECISION: {final_decision_text}")
-                else:
-                    st.success(f"FINAL DECISION: {final_decision_text}")
-                    
-                st.markdown(f"**ML Model Score (Probability of Phishing):** `{ml_prob * 100:.2f}%`")
-                st.markdown(f"**Rule-Based Score:** `{rule_score}`")
-                
-                st.markdown("---")
-                st.markdown("##### Detailed Explanation (Rules Triggered):")
-                if not explanation:
-                    st.write("No suspicious rules triggered.")
-                else:
-                    for line in explanation:
-                        st.write(f"- {line}")
-                        
-                st.info("Analysis complete for this file!")
+        # --- 2. DISPLAY PHASE (with Sidebar) ---
+        
+        # Get a list of filenames for the selector
+        # We add a small icon based on the score
+        filenames = []
+        for res in all_results:
+            # Use .get() for safety in case of error
+            icon = "🚨" if res.get('ml_prob', 0) >= 0.70 else "✅"
+            filenames.append(f"{icon} {res['filename']}")
+        
+        # Create the sidebar selector
+        st.sidebar.title("Analyzed Files")
+        selected_filename_with_icon = st.sidebar.radio(
+            "Select a report to view:",
+            filenames
+        )
+        
+        # Find the full result dictionary that matches the selected filename
+        # We have to strip the icon off the front to find the real name
+        selected_filename = selected_filename_with_icon[2:] # Cut off the icon and space
+        
+        selected_result = None
+        for res in all_results:
+            if res['filename'] == selected_filename:
+                selected_result = res
+                break
+        
+        # --- 3. Call the display function ---
+        if selected_result:
+            display_report(selected_result)
 else:
-    pass
+    # This runs if the models failed to load
+    st.warning("Please wait for models to load or check errors above.")
